@@ -9,6 +9,8 @@ export type WsEventType =
   | 'seek'
   | 'volume'
   | 'error'
+  | 'network'
+  | 'pairing'
   | 'connection';
 
 export interface WsMessage {

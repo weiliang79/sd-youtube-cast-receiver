@@ -66,7 +66,7 @@ export const PlayerView = () => {
   };
 
   const trustDescription = network.name
-    ? `Currently on "${network.name}". Receiver runs only on trusted networks.`
+    ? `Currently on "${network.name}". Automatic discovery runs only on trusted networks.`
     : 'No network detected';
 
   const albumArt = track?.albumArt;

@@ -196,6 +196,40 @@ tcpdump is optional and is not performed by these scripts.
 
 ## Frontend debugging with Steam CEF DevTools
 
+### TV-code pairing verification on the Deck
+
+Pairing uses `GET /api/pairing`, `POST /api/pairing/start` and
+`POST /api/pairing/stop`. Each returns an in-memory snapshot with `status`
+(`idle`, `loading`, `ready`, `error`), `code`, `error` and `expiresAt` (Unix
+milliseconds, or null). Changes arrive as WebSocket `{event: "pairing", data: ...}`
+messages. GET is read-only and does not start generation. Do not capture real
+pairing codes in debug logs or saved API transcripts.
+
+Local tests cover the pairing manager, REST/WebSocket transitions, client state
+resynchronization, and the installed SDK's address-filter behavior with fake UDP
+sockets. The following still need real-device verification:
+
+- With **Trust this network** off, generate a code in Pairing and link from the
+  YouTube mobile app, including from a different network. Confirm playback,
+  queue, progress and volume work. The SDK still opens its DIAL HTTP listener
+  (default port 3000), which must be free even in manual mode.
+- Keep the tab open for more than five minutes to verify code refreshes. Close
+  and reopen the panel, then break/restore the WebSocket connection: there should
+  be one continuing code-generation service and the latest state should return.
+- Stop during a request, retry after an internet error, and restart the backend.
+  Stopped/expired codes must disappear; late replies must not resurrect them.
+  The SDK's fetch cannot be canceled through its public API, so a retry waits for
+  a previous in-flight fetch to settle instead of starting overlapping requests.
+- Toggle network trust while a manually linked phone is playing. Allow up to
+  15 seconds for the SDK's interface scan; verify SSDP is restricted on untrusted
+  networks and resumes on trusted ones without interrupting the manual session.
+  Also test ordinary automatic discovery without generating a TV code.
+- Check Pairing tab focus/scroll behavior with the gamepad and confirm pairing
+  codes are absent from the backend journal and settings files. Existing session
+  identifiers and network trust preferences still persist normally.
+
+### Attach Steam CEF DevTools
+
 1. On the Deck, enable Steam Developer Mode in Settings → System, then enable
    **CEF Remote Debugging** under Developer settings. Labels vary by SteamOS
    version. Apply any Steam-requested restart manually after saving your work;

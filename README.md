@@ -7,6 +7,7 @@ A [Decky Loader](https://decky.xyz/) plugin that turns your Steam Deck into a Yo
 - Cast audio from YouTube / YouTube Music on your phone to your Steam Deck
 - Player tab with album art, track info, progress bar, and playback controls (play/pause/next/prev)
 - Queue tab showing upcoming tracks with metadata
+- Pairing tab with a TV code for manual linking when automatic discovery is unavailable
 - Volume control from the Deck panel
 - Persistent pairing — pair once, auto-reconnects on plugin load
 - Audio-only playback (works like a Chromecast Audio)
@@ -14,16 +15,53 @@ A [Decky Loader](https://decky.xyz/) plugin that turns your Steam Deck into a Yo
 ## How to Use
 
 1. Install the plugin via Decky Loader (developer mode, install from ZIP)
-2. Open the Decky panel — the plugin starts automatically and advertises on your network
+2. Open the Decky panel and enable **Trust this network** in Player to allow automatic discovery
 3. On your phone, open YouTube or YouTube Music
 4. Tap the **Cast** icon and select your Steam Deck (shown by its hostname)
 5. Play a song — audio plays through the Steam Deck
 
-### Pairing
+### Automatic discovery
 
-The plugin uses DIAL/SSDP for network discovery. Your phone and Steam Deck must be on the same WiFi network. Once paired, the connection persists — the phone will auto-reconnect when the plugin loads.
+The plugin uses DIAL/SSDP for automatic discovery on trusted networks. Your phone
+and Steam Deck must be on the same LAN and your router must allow multicast
+between them. Previously linked phones can reconnect while the receiver is running.
 
-If your Steam Deck doesn't appear in the cast list, your router may block multicast between WiFi clients (common with mesh networks). Try the "Link with TV code" option in YouTube settings as an alternative.
+### Manual pairing: Link with TV code
+
+1. On the Deck, open **YouTube Cast → Pairing → Generate TV code**.
+2. On your phone, open the **YouTube** app, tap **Cast → Add a device**
+   (or **Link with TV code**, depending on the app version). Older versions expose
+   code entry under **Settings → General → Watch on TV**.
+3. Enter the code displayed on the Deck and tap **Link**. Select the linked
+   **YouTube on <Deck hostname>** receiver and start playback.
+
+See [YouTube's TV-code instructions](https://support.google.com/youtube/answer/7640706?hl=en)
+for current app labels. TV-code entry uses the mobile app, not a desktop browser.
+
+Both devices need internet access, but they can be on different networks. Manual
+pairing does not require enabling **Trust this network** or multicast discovery.
+The library initializes a YouTube session for manual pairing; LAN SSDP advertising
+stays disabled unless the current network is trusted. The library's DIAL HTTP
+listener still exists while that session runs; this is not a separate pairing
+protocol or a second receiver.
+
+Codes refresh automatically about every five minutes. Use the latest displayed
+code; the old code is hidden while refreshing. Close/reopen the panel without
+losing an active request, and use **Retry** if generation fails. A backend
+reconnection reloads the current state. A backend restart clears the displayed
+code and stops generation; generate again when you need a code or to reactivate
+a manual-only session. Codes are neither logged nor saved to disk.
+
+**Stop generating codes** hides the code and stops future refreshes. It does not
+disconnect already linked phones or revoke a code that YouTube already issued.
+The manually enabled YouTube session remains available until the plugin backend
+stops, so linked phones can continue playing. Discovery changes preserve this
+manual session; allow up to 15 seconds for the library to update its LAN discovery
+interfaces after changing network trust.
+
+TV-code entry is documented here for the YouTube app. YouTube Music's manual-link
+UI varies by app/version; if it does not offer TV-code entry, use YouTube for this
+flow or use automatic discovery for YouTube Music.
 
 ## Known Limitations
 

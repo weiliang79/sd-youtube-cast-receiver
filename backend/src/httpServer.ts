@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { CastPlayer } from './CastPlayer.js';
 import type { Player as YtPlayer } from 'yt-cast-receiver';
+import type { PairingManager } from './PairingManager.js';
 
 interface NetworkSnapshot {
   uuid: string | null;
@@ -12,6 +13,7 @@ interface RouteContext {
   castPlayer: CastPlayer;
   libraryPlayer: YtPlayer;
   isConnected: () => boolean;
+  pairing: Pick<PairingManager, 'getState' | 'start' | 'stop'>;
   network: {
     getCurrent(): NetworkSnapshot;
     trust(): Promise<boolean>;
@@ -24,6 +26,7 @@ type RouteHandler = (body: any, ctx: RouteContext) => Promise<unknown>;
 const routes: Record<string, Record<string, RouteHandler>> = {
   GET: {
     '/api/health': async () => ({ ready: true }),
+    '/api/pairing': async (_body, ctx) => ctx.pairing.getState(),
 
     '/api/network/current': async (_body, ctx) => ctx.network.getCurrent(),
 
@@ -57,6 +60,8 @@ const routes: Record<string, Record<string, RouteHandler>> = {
   },
 
   POST: {
+    '/api/pairing/start': async (_body, ctx) => ctx.pairing.start(),
+    '/api/pairing/stop': async (_body, ctx) => ctx.pairing.stop(),
     '/api/play': async (_body, ctx) => {
       await ctx.libraryPlayer.resume();
       return { ok: true };

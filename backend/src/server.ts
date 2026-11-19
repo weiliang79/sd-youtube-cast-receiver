@@ -8,6 +8,8 @@ import { WsManager } from './wsManager.js';
 import { handleRequest } from './httpServer.js';
 import { selfUpdate } from './ytdlp.js';
 import { getCurrentNetwork, type ActiveNetwork } from './network.js';
+import { PairingManager } from './PairingManager.js';
+import { ReceiverLifecycle } from './ReceiverLifecycle.js';
 
 const PORT = 39281;
 
@@ -60,9 +62,11 @@ async function main() {
 
   // Create the YouTube Cast Receiver
   const deviceName = os.hostname();
+  const discoveryAddresses: string[] = [];
   const receiver = new YouTubeCastReceiver(castPlayer, {
     dial: {
       uuid: ssdpUuid,
+      bindToAddresses: discoveryAddresses,
     } as any,
     device: {
       name: deviceName,
@@ -81,53 +85,34 @@ async function main() {
   //   - advertising (live) — whether SSDP/DIAL is actually running
   //
   // Receiver advertises iff currentNetwork.name is in trustedNetworks.
-  // Empty list (or untrusted current network) = receiver off.
+  // Manual pairing can keep YouTube sessions running without LAN advertising.
   // Migration: drop legacy UUID-keyed list (incompatible matching).
   let trustedNetworks: string[] = (await dataStore.get<string[]>('network.trusted.names')) ?? [];
   let currentNetwork: ActiveNetwork | null = null;
   let advertising = false;
-  // UUID of the network the receiver is currently bound to. SSDP/DIAL
-  // multicast sockets are interface-specific — switching networks while
-  // advertising leaves the socket on the old interface (advertising into
-  // the void). When this differs from currentNetwork.uuid, we restart.
-  let boundNetworkUuid: string | null = null;
   let shuttingDown = false;
   const intervals: ReturnType<typeof setInterval>[] = [];
   console.log(`[YTCast] Loaded trusted networks: [${trustedNetworks.map((n) => `"${n}"`).join(', ')}]`);
 
+  const pairing: PairingManager = new PairingManager(
+    receiver.getPairingCodeRequestService(),
+    (state) => wsManager.broadcast('pairing', state),
+    () => lifecycle.enableManual(),
+  );
+  const lifecycle: ReceiverLifecycle = new ReceiverLifecycle(
+    receiver, discoveryAddresses,
+    () => pairing.receiverUnavailable(),
+    () => pairing.receiverReady(),
+  );
+  receiver.on('terminate', () => lifecycle.invalidate());
+
   const reconcile = async (): Promise<void> => {
     if (shuttingDown) return;
-    const shouldRun = !!currentNetwork && trustedNetworks.includes(currentNetwork.name);
-
-    // Case 0: advertising on a different network than current — rebind.
-    // Fires when switching between two trusted networks; without this,
-    // SSDP keeps broadcasting on the old interface.
-    if (shouldRun && advertising && currentNetwork && boundNetworkUuid !== currentNetwork.uuid) {
-      console.log(
-        `[YTCast] Reconcile: rebinding receiver to "${currentNetwork.name}" ` +
-        `(was bound to ${boundNetworkUuid ?? '(none)'})`
-      );
-      await receiver.stop();
-      advertising = false;
-      boundNetworkUuid = null;
-    }
-
-    // Only log when something actually changes — reconcile fires every
-    // 10s on the network poll, so steady-state silence is the goal.
-    if (shouldRun && !advertising) {
-      console.log(`[YTCast] Reconcile: starting receiver on "${currentNetwork?.name}"`);
-      await receiver.start();
-      advertising = true;
-      boundNetworkUuid = currentNetwork!.uuid;
-      console.log('[YTCast] Cast receiver advertising');
-    } else if (!shouldRun && advertising) {
-      console.log(
-        `[YTCast] Reconcile: stopping receiver (currentNetwork=${currentNetwork?.name ?? '(none)'} trusted=${shouldRun})`
-      );
-      await receiver.stop();
-      advertising = false;
-      boundNetworkUuid = null;
-      console.log('[YTCast] Cast receiver stopped advertising');
+    const trusted = !!currentNetwork && trustedNetworks.includes(currentNetwork.name);
+    await lifecycle.setNetwork(trusted ? currentNetwork!.uuid : null);
+    if (advertising !== lifecycle.advertising) {
+      advertising = lifecycle.advertising;
+      console.log(`[YTCast] Cast receiver ${advertising ? 'advertising' : 'stopped advertising'}`);
     }
   };
 
@@ -224,6 +209,7 @@ async function main() {
       libraryPlayer: castPlayer,
       isConnected: () => receiver.getConnectedSenders().length > 0,
       network: networkControl,
+      pairing,
     });
   });
 
@@ -332,6 +318,7 @@ async function main() {
   const shutdown = async () => {
     if (shuttingDown) return;
     shuttingDown = true;
+    pairing.dispose();
     console.log('[YTCast] Shutting down...');
 
     // Stop all background timers first so no new work starts after this.
@@ -346,15 +333,12 @@ async function main() {
     failSafe.unref();
 
     try {
-      if (advertising) {
-        // Race against a 1s timer — yt-cast-receiver's stop() can hang
-        // on flaky network conditions during SSDP teardown.
-        await Promise.race([
-          receiver.stop(),
-          new Promise<void>((resolve) => setTimeout(resolve, RECEIVER_STOP_LIMIT_MS)),
-        ]);
-        advertising = false;
-      }
+      // Close manual sessions too, including when LAN advertising is off.
+      await Promise.race([
+        lifecycle.close(),
+        new Promise<void>((resolve) => setTimeout(resolve, RECEIVER_STOP_LIMIT_MS)),
+      ]);
+      advertising = false;
       await dataStore.flush();
       wsManager.close();
       httpServer.close();

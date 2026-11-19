@@ -1,4 +1,5 @@
 import type { TrackInfo } from '../types';
+import { pairingClient } from './pairingClient';
 
 const BACKEND_URL = 'http://127.0.0.1:39281';
 const WS_URL = 'ws://127.0.0.1:39281';
@@ -175,6 +176,7 @@ function connectWebSocket() {
   }
 
   ws.onopen = () => {
+    pairingClient.connect();
     console.log('[YTCast] WebSocket connected');
     reconnectDelay = 1000;
     // Fetch fresh state on reconnect
@@ -204,6 +206,7 @@ function connectWebSocket() {
   };
 
   ws.onclose = () => {
+    pairingClient.disconnect();
     console.log('[YTCast] WebSocket disconnected');
     scheduleReconnect();
   };
@@ -223,6 +226,10 @@ function scheduleReconnect() {
 
 function handleWsMessage(msg: { event: string; data: any }) {
   switch (msg.event) {
+    case 'pairing': {
+      pairingClient.receive(msg.data);
+      break;
+    }
     case 'track': {
       const info: TrackInfo = {
         videoId: msg.data.videoId,
@@ -455,6 +462,7 @@ export function initAudio() {
 }
 
 export function destroyAudio() {
+  pairingClient.disconnect();
   stopProgressReporting();
 
   if (volumeSettleTimer) {
