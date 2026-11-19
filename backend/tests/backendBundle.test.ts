@@ -37,7 +37,9 @@ describe('packaged backend module format', () => {
     const launcher = readFileSync(join(root, 'main.py'), 'utf8');
     expect(launcher).toContain('SERVER_CJS = os.path.join(PLUGIN_DIR, "backend", "out", "server.cjs")');
     expect(launcher).toContain('[NODE_BIN, SERVER_CJS]');
-    expect(readFileSync(join(root, 'build.ps1'), 'utf8')).toContain('"backend/out/server.cjs"');
+    expect(pkg.scripts.package).toBe('node scripts/package.mjs');
+    expect(readFileSync(join(root, 'scripts/package.mjs'), 'utf8')).toContain("'backend/out/server.cjs'");
+    expect(readFileSync(join(root, 'build.ps1'), 'utf8')).toContain('pnpm run package');
   });
 
   it('parses the real bundle under the packaged root type:module', () => {

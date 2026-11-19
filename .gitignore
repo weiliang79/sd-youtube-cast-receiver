@@ -1,4 +1,5 @@
 node_modules/
+__pycache__/
 dist/
 backend/out/
 bin/
@@ -7,6 +8,7 @@ bin/
 .vscode/
 *.log
 staging/
+.package-*/
 node-extract/
 node-linux-x64.tar.xz
 node-linux-x64.tar

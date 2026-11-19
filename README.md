@@ -41,11 +41,12 @@ To update the plugin, you must **uninstall the existing version first**, then in
 
 ## Building from Source
 
-Requires: Node.js, pnpm, PowerShell (Windows)
+Requires: Node.js 20+, pnpm, and `tar` (included with macOS, most Linux
+distributions, and Windows 10/11). PowerShell is optional.
 
-```powershell
+```sh
 # Install dependencies
-pnpm install
+pnpm install --frozen-lockfile
 
 # Build frontend + backend
 pnpm run build
@@ -54,11 +55,23 @@ pnpm run build:backend
 # Run tests
 pnpm test
 
-# Package into ZIP (downloads Node.js + yt-dlp linux binaries)
+# Install locked dependencies, build both bundles, and package Linux x64 binaries
 pnpm run package
 ```
 
 The output `youtube-cast-receiver.zip` can be installed on the Steam Deck via Decky's developer install option.
+
+Packaging works on macOS, Windows, and Linux, including ARM hosts. It always
+targets Steam Deck's Linux x86_64 runtime: Node v20.18.3 and the standalone
+`yt-dlp_linux` release asset. Downloads are checked against upstream SHA-256 sums
+and cached in `bin/`. ZIP entries retain Unix executable permissions for both
+binaries. `build.ps1` remains an optional wrapper for existing Windows workflows.
+Tests are run separately; `pnpm run package --skip-build` packages existing build
+artifacts without installing dependencies or rebuilding.
+
+For the build/test loop, cross-platform development packaging, configurable SSH
+deployment, Decky logs, backend/advertising checks, and Steam CEF DevTools, see
+[the development workflow](docs/DEVELOPMENT.md).
 
 ## Architecture
 

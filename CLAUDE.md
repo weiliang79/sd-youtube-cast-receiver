@@ -32,7 +32,7 @@ YouTube Cast Receiver — a Decky Loader plugin for Steam Deck that acts as a Yo
 
 ### Other
 - `main.py` — Python shim for Decky. Spawns/kills Node.js.
-- `build.ps1` — PowerShell build script. Downloads Node.js + yt-dlp Linux binaries, packages ZIP.
+- `scripts/package.mjs` — Cross-platform build/packager. Downloads and verifies Linux x64 Node.js + yt-dlp binaries and creates the Decky ZIP; `build.ps1` delegates to it.
 - `backend/xml/` — DIAL XML templates copied from `peer-dial` (needed at runtime because esbuild changes `__dirname`).
 - `backend/out/server.cjs` — Explicit CommonJS extension so Node.js loads the bundle correctly despite root `"type":"module"`; no nested package.json override is needed.
 
@@ -43,7 +43,7 @@ pnpm install              # Install dependencies
 pnpm run build            # Build frontend (Rollup → dist/index.js)
 pnpm run build:backend    # Build backend (esbuild → backend/out/server.cjs)
 pnpm test                 # Run backend tests (vitest)
-pnpm run package          # Full build + download binaries + ZIP (calls build.ps1)
+pnpm run package          # Full build + verified Linux binaries + ZIP (Node.js)
 ```
 
 ## Important Patterns
