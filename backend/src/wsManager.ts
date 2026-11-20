@@ -1,5 +1,6 @@
 import { WebSocketServer, WebSocket } from 'ws';
-import type { Server } from 'node:http';
+import type { IncomingMessage as HttpIncomingMessage, Server } from 'node:http';
+import { type LocalAccess, WS_PROTOCOL } from './LocalAccess.js';
 
 export type WsEventType =
   | 'track'
@@ -32,8 +33,12 @@ export class WsManager {
   private clients: Set<WebSocket> = new Set();
   private incomingHandler: IncomingHandler | null = null;
 
-  constructor(server: Server) {
-    this.wss = new WebSocketServer({ server });
+  constructor(server: Server, access: LocalAccess) {
+    this.wss = new WebSocketServer({
+      server,
+      verifyClient: ({ req }: { req: HttpIncomingMessage }) => access.authorizeWebSocket(req),
+      handleProtocols: (protocols) => protocols.has(WS_PROTOCOL) ? WS_PROTOCOL : false,
+    });
 
     this.wss.on('connection', (ws) => {
       this.clients.add(ws);

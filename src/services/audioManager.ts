@@ -1,8 +1,7 @@
 import type { TrackInfo } from '../types';
 import { pairingClient } from './pairingClient';
+import { backendFetch, backendWebSocket, resetBackendAccess } from './backendAccess';
 
-const BACKEND_URL = 'http://127.0.0.1:39281';
-const WS_URL = 'ws://127.0.0.1:39281';
 const AUDIO_ID = 'ytcast-audio-player';
 const PROGRESS_INTERVAL_MS = 1000;
 
@@ -13,6 +12,7 @@ let ws: WebSocket | null = null;
 let progressInterval: ReturnType<typeof setInterval> | null = null;
 let reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
 let reconnectDelay = 1000;
+let connectionGeneration = 0;
 
 let currentTrack: TrackInfo | null = null;
 let isPlaying = false;
@@ -167,20 +167,29 @@ function sendWs(event: string, data: unknown = {}) {
   }
 }
 
-function connectWebSocket() {
+async function connectWebSocket(): Promise<void> {
+  const generation = ++connectionGeneration;
+  closeWebSocket();
   try {
-    ws = new WebSocket(WS_URL);
+    const socket = await backendWebSocket();
+    if (generation !== connectionGeneration || !audioElement) {
+      socket.close();
+      return;
+    }
+    ws = socket;
   } catch {
-    scheduleReconnect();
+    if (generation === connectionGeneration && audioElement) scheduleReconnect();
     return;
   }
 
   ws.onopen = () => {
+    if (generation !== connectionGeneration || !audioElement) return;
     pairingClient.connect();
     console.log('[YTCast] WebSocket connected');
     reconnectDelay = 1000;
     // Fetch fresh state on reconnect
     void apiGetState().then((state) => {
+      if (generation !== connectionGeneration || !audioElement) return;
       if (state) {
         if (state.track) notifyTrack(state.track);
         notifyPlayState(state.isPlaying ?? false);
@@ -189,14 +198,17 @@ function connectWebSocket() {
       }
     });
     void apiGetQueue().then((data) => {
+      if (generation !== connectionGeneration || !audioElement) return;
       if (data) notifyQueue(data.tracks ?? [], data.position ?? -1);
     });
     void apiGetNetwork().then((data) => {
+      if (generation !== connectionGeneration || !audioElement) return;
       if (data && typeof data.trusted === 'boolean') notifyNetwork(data as NetworkInfo);
     });
   };
 
   ws.onmessage = (event) => {
+    if (generation !== connectionGeneration || !audioElement) return;
     try {
       const msg = JSON.parse(event.data as string);
       handleWsMessage(msg);
@@ -206,6 +218,8 @@ function connectWebSocket() {
   };
 
   ws.onclose = () => {
+    if (generation !== connectionGeneration) return;
+    resetBackendAccess();
     pairingClient.disconnect();
     console.log('[YTCast] WebSocket disconnected');
     scheduleReconnect();
@@ -216,11 +230,21 @@ function connectWebSocket() {
   };
 }
 
+function closeWebSocket(): void {
+  if (!ws) return;
+  ws.onopen = null;
+  ws.onmessage = null;
+  ws.onclose = null;
+  ws.onerror = null;
+  ws.close();
+  ws = null;
+}
+
 function scheduleReconnect() {
   if (reconnectTimeout) clearTimeout(reconnectTimeout);
   reconnectTimeout = setTimeout(() => {
     reconnectDelay = Math.min(reconnectDelay * 2, 30000);
-    connectWebSocket();
+    void connectWebSocket();
   }, reconnectDelay);
 }
 
@@ -392,11 +416,12 @@ export function setAudioVolume(level: number, local: boolean = false) {
 
 async function apiPost(path: string, body?: Record<string, unknown>): Promise<any> {
   try {
-    const res = await fetch(`${BACKEND_URL}${path}`, {
+    const res = await backendFetch(path, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: body ? JSON.stringify(body) : undefined,
     });
+    if (!res.ok) throw new Error('Backend request failed');
     return await res.json();
   } catch (e) {
     console.error(`[YTCast] API ${path} failed:`, e);
@@ -406,7 +431,8 @@ async function apiPost(path: string, body?: Record<string, unknown>): Promise<an
 
 async function apiGet(path: string): Promise<any> {
   try {
-    const res = await fetch(`${BACKEND_URL}${path}`);
+    const res = await backendFetch(path);
+    if (!res.ok) throw new Error('Backend request failed');
     return await res.json();
   } catch (e) {
     console.error(`[YTCast] API ${path} failed:`, e);
@@ -425,6 +451,7 @@ export async function apiGetQueue() { return apiGet('/api/queue'); }
 export async function apiGetNetwork() { return apiGet('/api/network/current'); }
 export async function apiTrustNetwork() { return apiPost('/api/network/trust'); }
 export async function apiUntrustNetwork() { return apiPost('/api/network/untrust'); }
+export async function apiJumpToTrack(videoId: string) { return apiPost('/api/queue/jump', { videoId }); }
 
 export function togglePlayback() {
   if (isPlaying) {
@@ -458,10 +485,12 @@ export function initAudio() {
   setAudioVolume(currentVolume);
 
   // Connect WebSocket
-  connectWebSocket();
+  void connectWebSocket();
 }
 
 export function destroyAudio() {
+  connectionGeneration++;
+  resetBackendAccess();
   pairingClient.disconnect();
   stopProgressReporting();
 
@@ -475,11 +504,7 @@ export function destroyAudio() {
     reconnectTimeout = null;
   }
 
-  if (ws) {
-    ws.onclose = null; // Prevent reconnect on intentional close
-    ws.close();
-    ws = null;
-  }
+  closeWebSocket();
 
   if (audioElement) {
     audioElement.pause();

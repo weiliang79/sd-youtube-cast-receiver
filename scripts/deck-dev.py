@@ -100,11 +100,12 @@ echo "Code backup retained at $stage/previous-code.tar.gz"
 
 def status_command():
     return '''failed=0
-for endpoint in health network/current state; do
+for endpoint in health; do
   printf '\\n/api/%s\\n' "$endpoint"
   curl --fail --silent --show-error --max-time 5 "http://127.0.0.1:39281/api/$endpoint" || failed=1
   printf '\\n'
 done
+echo 'Private state/network/pairing APIs require the Decky frontend capability.'
 echo 'Recent receiver journal evidence (historical, not a live advertising API):'
 sudo journalctl -b -u plugin_loader.service --no-pager -n 60 --grep='YTCast|READY' || failed=1
 exit "$failed"

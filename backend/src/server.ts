@@ -10,6 +10,7 @@ import { selfUpdate } from './ytdlp.js';
 import { getCurrentNetwork, type ActiveNetwork } from './network.js';
 import { PairingManager } from './PairingManager.js';
 import { ReceiverLifecycle } from './ReceiverLifecycle.js';
+import { LocalAccess } from './LocalAccess.js';
 
 const PORT = 39281;
 
@@ -26,6 +27,8 @@ const ytdlpPath = process.env.YTCAST_YTDLP_PATH || path.join(binDir, 'yt-dlp');
 const dataStorePath = '/home/deck/homebrew/settings/youtube-cast-receiver/datastore.json';
 
 async function main() {
+  const access = new LocalAccess(process.env.YTCAST_API_TOKEN ?? '', PORT);
+  delete process.env.YTCAST_API_TOKEN; // Do not pass the capability to yt-dlp children.
   console.log('[YTCast] Starting YouTube Cast Receiver backend...');
 
   // Self-update yt-dlp (async, non-blocking to startup)
@@ -37,7 +40,7 @@ async function main() {
   const httpServer = http.createServer();
 
   // Create WebSocket manager
-  const wsManager = new WsManager(httpServer);
+  const wsManager = new WsManager(httpServer, access);
 
   // Create DataStore
   const dataStore = new JsonDataStore(dataStorePath);
@@ -103,6 +106,7 @@ async function main() {
     receiver, discoveryAddresses,
     () => pairing.receiverUnavailable(),
     () => pairing.receiverReady(),
+    () => pairing.canIdleReceiver() && receiver.getConnectedSenders().length === 0 && !castPlayer.isCurrentlyPlaying(),
   );
   receiver.on('terminate', () => lifecycle.invalidate());
 
@@ -110,6 +114,7 @@ async function main() {
     if (shuttingDown) return;
     const trusted = !!currentNetwork && trustedNetworks.includes(currentNetwork.name);
     await lifecycle.setNetwork(trusted ? currentNetwork!.uuid : null);
+    await lifecycle.releaseManualIfIdle();
     if (advertising !== lifecycle.advertising) {
       advertising = lifecycle.advertising;
       console.log(`[YTCast] Cast receiver ${advertising ? 'advertising' : 'stopped advertising'}`);
@@ -205,6 +210,7 @@ async function main() {
   // Handle HTTP requests
   httpServer.on('request', (req, res) => {
     handleRequest(req, res, {
+      access,
       castPlayer,
       libraryPlayer: castPlayer,
       isConnected: () => receiver.getConnectedSenders().length > 0,
@@ -318,7 +324,7 @@ async function main() {
   const shutdown = async () => {
     if (shuttingDown) return;
     shuttingDown = true;
-    pairing.dispose();
+    const pairingStopped = pairing.dispose();
     console.log('[YTCast] Shutting down...');
 
     // Stop all background timers first so no new work starts after this.
@@ -335,7 +341,7 @@ async function main() {
     try {
       // Close manual sessions too, including when LAN advertising is off.
       await Promise.race([
-        lifecycle.close(),
+        pairingStopped.then(() => lifecycle.close()),
         new Promise<void>((resolve) => setTimeout(resolve, RECEIVER_STOP_LIMIT_MS)),
       ]);
       advertising = false;

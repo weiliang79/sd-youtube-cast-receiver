@@ -11,6 +11,7 @@ type Service = Pick<PairingCodeRequestService, 'on' | 'off' | 'start' | 'stop'>;
 const IDLE: PairingState = { status: 'idle', code: null, error: null, expiresAt: null };
 const REQUEST_TIMEOUT = 30000;
 const CODE_LIFETIME = 300000;
+const CONNECTION_GRACE = 30000;
 
 /** One library service, with transient state only. Never log raw responses/errors. */
 export class PairingManager {
@@ -20,6 +21,13 @@ export class PairingManager {
   private disposed = false;
   private started = false;
   private inFlight = false;
+  private draining = false;
+  private initializations = 0;
+  private keepReceiverUntil = 0;
+  private shutdownWaiters = new Set<() => void>();
+  private externalStopped = false;
+  private sdkStart: () => void;
+  private sdkStop: () => void;
   private generation = 0;
   private requestGeneration = -1;
   private timer: ReturnType<typeof setTimeout> | null = null;
@@ -29,6 +37,26 @@ export class PairingManager {
     private changed: (state: PairingState) => void,
     private ensureReceiver: () => Promise<void>,
   ) {
+    this.sdkStart = service.start.bind(service);
+    this.sdkStop = service.stop.bind(service);
+    // Session.restart() also calls these public methods. Serialize its calls
+    // with manager requests so a restart cannot overlap an outstanding fetch.
+    // Keep these guards through disposal to reject delayed SDK restarts.
+    service.start = () => {
+      if (!this.active || this.disposed) return;
+      if (this.started && !this.externalStopped) return;
+      this.externalStopped = false;
+      this.generation++;
+      this.ready = true;
+      this.loading();
+      this.tryStart();
+    };
+    service.stop = () => {
+      this.externalStopped = true;
+      this.ready = false;
+      this.requestStop();
+      if (this.active) this.loading();
+    };
     service.on('request', this.onRequest);
     service.on('response', this.onResponse);
     service.on('error', this.onError);
@@ -41,12 +69,15 @@ export class PairingManager {
     this.active = true;
     const generation = ++this.generation;
     this.loading();
-    void Promise.resolve().then(() => {
-      if (this.active && !this.disposed && generation === this.generation) return this.ensureReceiver();
-      return undefined;
+    void Promise.resolve().then(async () => {
+      if (!this.active || this.disposed || generation !== this.generation) return;
+      this.initializations++;
+      try { await this.ensureReceiver(); }
+      finally { this.initializations--; this.finishShutdown(); }
     }).then(() => {
       if (!this.active || this.disposed || generation !== this.generation) return;
       this.ready = true;
+      this.externalStopped = false;
       this.tryStart();
     }).catch(() => {
       if (generation === this.generation && this.active) this.fail();
@@ -58,8 +89,7 @@ export class PairingManager {
     this.active = false;
     this.generation++;
     this.clearTimer();
-    this.service.stop();
-    this.started = false;
+    this.requestStop();
     this.publish(IDLE);
     return this.getState();
   }
@@ -67,22 +97,43 @@ export class PairingManager {
   receiverUnavailable(): void {
     this.ready = false;
     this.generation++;
-    this.service.stop();
-    this.started = false;
+    this.requestStop();
     if (this.active) this.loading();
   }
 
   receiverReady(): void {
     this.ready = true;
+    this.externalStopped = false;
     this.tryStart();
   }
 
-  dispose(): void {
+  canIdleReceiver(): boolean {
+    return !this.active && !this.inFlight && !this.draining && this.initializations === 0
+      && Date.now() >= this.keepReceiverUntil;
+  }
+
+  dispose(): Promise<void> {
     this.disposed = true;
     this.stop();
-    // An outstanding library fetch may emit after stop(). Keep its error handler
-    // until it settles, then detach; otherwise EventEmitter would throw.
-    if (!this.inFlight) this.detach();
+    return new Promise((resolve) => {
+      this.shutdownWaiters.add(resolve);
+      this.finishShutdown();
+    });
+  }
+
+  private requestStop(): void {
+    // SDK stop() marks STOPPED and then becomes a no-op. Stopping mid-fetch
+    // would leave the timer it schedules after response impossible to stop.
+    if (!this.inFlight && !this.draining) this.sdkStop();
+    this.started = false;
+  }
+
+  private finishShutdown(): void {
+    if (!this.disposed || this.inFlight || this.draining || this.initializations) return;
+    this.sdkStop();
+    this.detach();
+    this.shutdownWaiters.forEach((resolve) => resolve());
+    this.shutdownWaiters.clear();
   }
 
   private publish(state: PairingState): void {
@@ -105,15 +156,14 @@ export class PairingManager {
     this.active = false;
     this.generation++;
     this.clearTimer();
-    this.service.stop();
-    this.started = false;
+    this.requestStop();
     this.publish({ ...IDLE, status: 'error', error: message });
   }
 
   private tryStart(): void {
-    if (!this.active || !this.ready || this.disposed || this.started || this.inFlight) return;
+    if (!this.active || !this.ready || this.disposed || this.started || this.inFlight || this.draining) return;
     this.started = true;
-    try { this.service.start(); } catch { this.fail(); }
+    try { this.sdkStart(); } catch { this.fail(); }
   }
 
   private onRequest = (): void => {
@@ -123,34 +173,43 @@ export class PairingManager {
   };
 
   private onResponse = (raw: string): void => {
-    const current = this.inFlight && this.active && this.requestGeneration === this.generation;
+    const current = this.inFlight && this.active && !this.externalStopped && this.requestGeneration === this.generation;
     this.inFlight = false;
-    if (current && typeof raw === 'string' && /^\d+(?:[\s-]+\d+)*$/.test(raw.trim())) {
+    this.draining = true;
+    const valid = typeof raw === 'string' && /^\d+(?:[\s-]+\d+)*$/.test(raw.trim());
+    if (valid) this.keepReceiverUntil = Date.now() + CODE_LIFETIME + CONNECTION_GRACE;
+    if (current && valid) {
       this.clearTimer();
       this.publish({ status: 'ready', code: raw.replace(/[\s-]/g, ''), error: null, expiresAt: Date.now() + CODE_LIFETIME });
       // Hide the old code even if the library's next automatic refresh is delayed.
-      this.timer = setTimeout(() => this.loading(), CODE_LIFETIME);
+      if (this.active && !this.disposed && this.requestGeneration === this.generation) {
+        this.timer = setTimeout(() => this.loading(), CODE_LIFETIME);
+      }
     } else {
       if (current) this.fail();
-      this.drainStoppedRequest();
     }
+    this.drainStoppedRequest();
   };
 
   private onError = (): void => {
     const current = this.inFlight && this.active && this.requestGeneration === this.generation;
     this.inFlight = false;
+    this.draining = true;
     this.started = false;
     if (current) this.fail();
     this.drainStoppedRequest();
   };
 
   private drainStoppedRequest(): void {
-    // The library schedules a new refresh AFTER emitting response, even when
-    // stop() was called during its fetch. Clear that timer after its callback.
+    // The installed SDK schedules its refresh synchronously after emit(). Keep
+    // RUNNING until this microtask so stop() clears it. Tests use the real SDK.
     queueMicrotask(() => {
-      this.service.stop();
-      this.started = false;
-      if (this.disposed) this.detach();
+      if (!this.active || this.disposed || this.externalStopped || this.requestGeneration !== this.generation) {
+        this.sdkStop();
+        this.started = false;
+      }
+      this.draining = false;
+      if (this.disposed) this.finishShutdown();
       else this.tryStart();
     });
   }

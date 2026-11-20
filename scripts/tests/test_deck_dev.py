@@ -57,7 +57,7 @@ class DevelopmentWorkflowTests(unittest.TestCase):
             result = subprocess.run(["sh", "-c", dev.status_command()], capture_output=True, text=True,
                                     env={**os.environ, "PATH": f"{tools}{os.pathsep}{os.environ['PATH']}"})
             self.assertEqual(result.returncode, 1)
-            self.assertIn("/api/network/current", result.stdout)
+            self.assertIn("/api/health", result.stdout)
             self.assertIn("journal evidence: journalctl", result.stdout)
 
     def test_deployment_quotes_paths_and_restarts_only_decky_after_failure(self):

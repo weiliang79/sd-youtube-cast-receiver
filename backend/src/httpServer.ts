@@ -2,6 +2,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { CastPlayer } from './CastPlayer.js';
 import type { Player as YtPlayer } from 'yt-cast-receiver';
 import type { PairingManager } from './PairingManager.js';
+import type { LocalAccess } from './LocalAccess.js';
 
 interface NetworkSnapshot {
   uuid: string | null;
@@ -10,6 +11,7 @@ interface NetworkSnapshot {
 }
 
 interface RouteContext {
+  access: LocalAccess;
   castPlayer: CastPlayer;
   libraryPlayer: YtPlayer;
   isConnected: () => boolean;
@@ -157,19 +159,9 @@ export function handleRequest(
   res: ServerResponse,
   ctx: RouteContext
 ): void {
+  if (!ctx.access.authorizeHttp(req, res)) return;
   const method = req.method ?? 'GET';
   const url = req.url ?? '/';
-
-  // CORS headers for local requests
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-
-  if (method === 'OPTIONS') {
-    res.writeHead(204);
-    res.end();
-    return;
-  }
 
   const handler = routes[method]?.[url];
 

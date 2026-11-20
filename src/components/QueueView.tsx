@@ -3,20 +3,7 @@ import { FaMusic } from 'react-icons/fa';
 import { IoVolumeMedium } from 'react-icons/io5';
 import { usePlayer } from '../context/PlayerContext';
 import { Section } from './Section';
-
-const BACKEND_URL = 'http://127.0.0.1:39281';
-
-async function jumpToTrack(videoId: string) {
-  try {
-    await fetch(`${BACKEND_URL}/api/queue/jump`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ videoId }),
-    });
-  } catch (e) {
-    console.error('[YTCast] Queue jump failed:', e);
-  }
-}
+import { apiJumpToTrack } from '../services/audioManager';
 
 export const QueueView = () => {
   const { queue } = usePlayer();
@@ -63,7 +50,7 @@ export const QueueView = () => {
                 borderRadius: '0',
                 overflow: 'hidden',
               }}
-              onClick={() => { void jumpToTrack(track.videoId); }}
+              onClick={() => { void apiJumpToTrack(track.videoId); }}
             >
               {/* Thumbnail */}
               <div style={{ width: '60px', height: '60px', flexShrink: 0, alignSelf: 'center', position: 'relative', background: 'rgba(255,255,255,0.05)' }}>

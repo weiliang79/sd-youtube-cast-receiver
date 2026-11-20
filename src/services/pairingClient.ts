@@ -1,3 +1,5 @@
+import { backendFetch } from './backendAccess';
+
 export interface PairingState {
   status: 'idle' | 'loading' | 'ready' | 'error';
   code: string | null;
@@ -80,7 +82,7 @@ export const pairingClient = new PairingClient(async (path, method) => {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 15000);
   try {
-    const response = await fetch(`http://127.0.0.1:39281${path}`, { method, signal: controller.signal });
+    const response = await backendFetch(path, { method, signal: controller.signal });
     if (!response.ok) throw new Error('Pairing request failed');
     const state = await response.json();
     if (!['idle', 'loading', 'ready', 'error'].includes(state.status)) throw new Error('Invalid pairing state');

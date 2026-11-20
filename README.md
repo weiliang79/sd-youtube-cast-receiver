@@ -54,14 +54,33 @@ a manual-only session. Codes are neither logged nor saved to disk.
 
 **Stop generating codes** hides the code and stops future refreshes. It does not
 disconnect already linked phones or revoke a code that YouTube already issued.
-The manually enabled YouTube session remains available until the plugin backend
-stops, so linked phones can continue playing. Discovery changes preserve this
-manual session; allow up to 15 seconds for the library to update its LAN discovery
-interfaces after changing network trust.
+Active linked phones and playback keep the manually enabled YouTube session
+alive. Once generation has stopped, pending requests have settled, and no phone
+or playback is active, a manual-only receiver can become idle. It retains a
+pairing window of five minutes plus a 30-second connection grace period after
+the latest issued code (including a delayed response). The existing network poll
+checks for idling, so stopping can take another ten seconds. This is the plugin's
+idle policy, not revocation or a guarantee about YouTube's code validity. Generate
+again to reactivate an idle manual receiver. Trusted-network automatic discovery
+continues normally. Discovery changes preserve active manual sessions; allow up
+to 15 seconds for the library to update LAN discovery interfaces.
 
 TV-code entry is documented here for the YouTube app. YouTube Music's manual-link
 UI varies by app/version; if it does not offer TV-code entry, use YouTube for this
 flow or use automatic discovery for YouTube Music.
+
+### Local API access
+
+The frontend obtains a random, per-launch capability through Decky's RPC. Private
+HTTP requests and WebSocket connections require it, and browser access is limited
+to the Steam UI origin (`https://steamloopback.host`). The capability is not saved,
+logged, or exposed by a localhost token endpoint. The read-only `/api/health`
+probe remains available without a capability. Deploy `main.py` and both bundles
+together; older frontends cannot authenticate to the hardened backend.
+
+Decky RPC/CEF is the trust boundary. Other privileged Decky code, root, or a local
+process that can obtain Decky's own bootstrap token and control Decky are outside
+this protection. This plugin does not add isolation from Decky Loader itself.
 
 ## Known Limitations
 

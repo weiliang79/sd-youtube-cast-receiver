@@ -42,7 +42,7 @@ export const PairingView = () => {
           {state?.status === 'error' ? 'Retry' : 'Generate TV code'}
         </DialogButton>}
       {active && <DialogButton disabled={!online || busy} onClick={() => { void pairingClient.stop(); }}>Stop generating codes</DialogButton>}
-      <div style={{ fontSize: '12px' }}>Stopping hides the code and stops refreshing it. It does not disconnect linked phones or revoke an issued code.</div>
+      <div style={{ fontSize: '12px' }}>Stopping hides the code and stops refreshing it. Active phones stay connected; issued codes are not revoked.</div>
     </div>
   );
 };

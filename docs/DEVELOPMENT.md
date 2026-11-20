@@ -169,10 +169,12 @@ python3 scripts/deck-dev.py status
 python3 scripts/deck-dev.py logs
 ```
 
-`status` runs GET requests **on the Deck**, where the backend listens only on
+`status` runs a health GET request **on the Deck**, where the backend listens only on
 `127.0.0.1:39281`, with five-second timeouts, followed by recent YTCast journal
 entries from the current boot. An HTTP failure produces a nonzero exit status;
-the journal is still shown. `logs` follows the full Decky Loader journal; Ctrl+C
+the journal is still shown. Private state/network/pairing reads now require the
+Decky frontend capability, so the SSH helper does not fetch or print them.
+Inspect those through the authorized frontend/CEF session. `logs` follows the full Decky Loader journal; Ctrl+C
 ends the viewer without stopping the service.
 
 Interpret the evidence together:
@@ -205,6 +207,49 @@ milliseconds, or null). Changes arrive as WebSocket `{event: "pairing", data: ..
 messages. GET is read-only and does not start generation. Do not capture real
 pairing codes in debug logs or saved API transcripts.
 
+All private HTTP routes require `Authorization: Bearer <capability>`. `main.py`
+generates 256 random bits at each launch, supplies the capability to Node through
+`YTCAST_API_TOKEN`, and exposes `get_api_token` only through Decky RPC. Node removes
+that variable from its environment before spawning yt-dlp. Missing capabilities
+fail closed at startup. There is no plugin-local bootstrap endpoint or on-disk
+token. Reconnects discard cached frontend capabilities and obtain the current one
+via Decky; pending RPC/HTTP/socket work from an old session is ignored.
+
+The backend accepts the exact Host `127.0.0.1:39281`. Browser requests must use the
+exact origin `https://steamloopback.host`; null, foreign and lookalike origins are
+rejected even with a valid capability. Native requests with no Origin still need
+the capability. CORS allows only that Steam origin and the required headers,
+never `*`. Sensitive responses use `Cache-Control: no-store`. WebSocket upgrades
+validate the same source policy and use two request subprotocols: `ytcast-v1` and
+`ytcast-auth.<capability>`. The response selects only `ytcast-v1`; no secret goes in
+a URL or is echoed as the negotiated protocol. Unauthenticated sockets never join
+the broadcast client set. This also protects existing playback/queue endpoints.
+
+Trust boundary: Decky's RPC/CEF session and other code controlling it are
+privileged. Upstream Decky's localhost `/auth/token` bootstrap is readable by
+native clients; a process able to use that to control Decky can call plugin RPC
+as well. Plugin-local capabilities do not isolate the plugin from such a process,
+from other privileged Decky plugins, or from root. Do not treat Origin alone as
+native-client authentication or weaken this policy to debug a connection.
+
+The idle check uses the existing ten-second network poll. It releases manual mode
+only after generation is inactive, initialization/fetch/drain work has finished,
+the latest numeric SDK response is at least five minutes plus 30 seconds old, and
+the SDK reports no connected senders and the player is not playing. No issued
+code means no pairing-window delay. On a trusted network automatic discovery must
+run anyway, so prior manual intent is retained without extra resources or a
+restart. Eligibility is rechecked when the receiver becomes manual-only, using
+the then-current sender/playback state. No new polling interval is added.
+
+The installed SDK schedules its five-minute refresh immediately after emitting
+`response`; `stop()` is a no-op when its status is already STOPPED. The manager
+therefore defers stopping an in-flight fetch until a microtask after its event
+returns. It also serializes the same service's public start/stop methods used by
+SDK session recovery. A canceled generation never exposes a late code or starts
+overlapping fetches. Disposal waits for settlement before normal receiver teardown;
+the existing bounded shutdown/process exit remains the fallback for a hung fetch.
+Tests exercise the actual installed SDK service, not only a mock of these timings.
+
 Local tests cover the pairing manager, REST/WebSocket transitions, client state
 resynchronization, and the installed SDK's address-filter behavior with fake UDP
 sockets. The following still need real-device verification:
@@ -227,6 +272,14 @@ sockets. The following still need real-device verification:
 - Check Pairing tab focus/scroll behavior with the gamepad and confirm pairing
   codes are absent from the backend journal and settings files. Existing session
   identifiers and network trust preferences still persist normally.
+- Restart/redeploy the backend with the panel open: capability rotation must
+  reconnect automatically, and normal playback controls and queue jumps must
+  still work. Confirm the real CEF Origin is the allowlisted Steam origin; do not
+  add wildcard CORS if it differs. From an ordinary localhost client, private
+  HTTP and unauthenticated WebSocket access must fail while health still works.
+- Stop generation with and without an active phone. The active phone must keep
+  playing; an unused manual-only receiver should stop after the defined pairing
+  window and the next network poll. Verify restarting generation reactivates it.
 
 ### Attach Steam CEF DevTools
 

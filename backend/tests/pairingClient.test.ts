@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+vi.mock('@decky/api', () => ({ call: vi.fn() }));
 import { PairingClient, type PairingState } from '../../src/services/pairingClient';
 
 const idle: PairingState = { status: 'idle', code: null, error: null, expiresAt: null };

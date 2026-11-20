@@ -4,6 +4,7 @@ import signal
 import subprocess
 import logging
 import asyncio
+import secrets
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("YTCast")
@@ -50,6 +51,15 @@ def _stage_runtime_binaries():
 
 class Plugin:
     node_process = None
+    _api_token = None
+
+    async def get_api_token(self):
+        """Only exposed through Decky RPC; never through the plugin's local API."""
+        if self.node_process is None or self.node_process.poll() is not None:
+            self._api_token = None
+        if not self._api_token:
+            raise RuntimeError("Backend is not running")
+        return self._api_token
 
     async def _main(self):
         logger.info("Starting YouTube Cast Receiver backend...")
@@ -58,6 +68,7 @@ class Plugin:
         _stage_runtime_binaries()
 
         try:
+            self._api_token = secrets.token_urlsafe(32)
             # start_new_session=True puts Node (and any children it spawns,
             # like yt-dlp) into its own process group / session. This lets us
             # kill the entire group on _unload via os.killpg.
@@ -67,6 +78,7 @@ class Plugin:
                 **os.environ,
                 "NODE_ENV": "production",
                 "YTCAST_YTDLP_PATH": YTDLP_BIN,
+                "YTCAST_API_TOKEN": self._api_token,
             }
             self.node_process = subprocess.Popen(
                 [NODE_BIN, SERVER_CJS],
@@ -97,8 +109,10 @@ class Plugin:
                 if ready:
                     logger.info("Backend is ready.")
                 else:
+                    self._api_token = None
                     logger.error("Backend process ended before signaling READY.")
             except asyncio.TimeoutError:
+                self._api_token = None
                 logger.error("Backend did not signal READY within 30 seconds.")
                 await self._terminate_process_group()
                 return
@@ -116,11 +130,13 @@ class Plugin:
             asyncio.ensure_future(log_stream(self.node_process.stderr, logger.warning))
 
         except Exception as e:
+            self._api_token = None
             logger.error(f"Failed to start backend: {e}")
 
     async def _terminate_process_group(self):
         """Kill the Node process group (Node + any children like yt-dlp)
         with bounded, non-blocking waits. Safe to call on already-dead procs."""
+        self._api_token = None
         if not self.node_process:
             return
 
@@ -172,6 +188,7 @@ class Plugin:
         self.node_process = None
 
     async def _unload(self):
+        self._api_token = None
         logger.info("Stopping YouTube Cast Receiver backend...")
         try:
             await self._terminate_process_group()

@@ -6,6 +6,8 @@ class Service extends EventEmitter {
   timer: ReturnType<typeof setTimeout> | null = null;
   start = vi.fn(() => { this.emit('request'); });
   stop = vi.fn(() => { if (this.timer) clearTimeout(this.timer); this.timer = null; });
+  startCalls = this.start;
+  stopCalls = this.stop;
   respond(code: string) {
     this.emit('response', code);
     // Mirror the library's late timer scheduling even after stop().
@@ -31,16 +33,16 @@ describe('PairingManager', () => {
 
   it('starts lazily and shares one service across repeated start requests', async () => {
     expect(manager.getState()).toEqual({ status: 'idle', code: null, error: null, expiresAt: null });
-    expect(service.start).not.toHaveBeenCalled();
+    expect(service.startCalls).not.toHaveBeenCalled();
     expect(manager.start().status).toBe('loading');
     manager.start();
     await settle();
     expect(ensureReceiver).toHaveBeenCalledTimes(1);
-    expect(service.start).toHaveBeenCalledTimes(1);
+    expect(service.startCalls).toHaveBeenCalledTimes(1);
     service.respond('123 456 789 012');
     expect(manager.getState()).toEqual({ status: 'ready', code: '123456789012', error: null, expiresAt: Date.now() + 300000 });
     manager.start();
-    expect(service.start).toHaveBeenCalledTimes(1);
+    expect(service.startCalls).toHaveBeenCalledTimes(1);
     const snapshot = manager.getState();
     snapshot.code = 'modified';
     expect(manager.getState().code).toBe('123456789012');
@@ -66,7 +68,7 @@ describe('PairingManager', () => {
     expect(log).not.toHaveBeenCalled();
     await settle();
     manager.start(); await settle();
-    expect(service.start).toHaveBeenCalledTimes(2);
+    expect(service.startCalls).toHaveBeenCalledTimes(2);
     service.respond('999888777666');
     expect(manager.getState().status).toBe('ready');
   });
@@ -85,9 +87,9 @@ describe('PairingManager', () => {
   it('does not mistake an old response for a rapid stop/start retry', async () => {
     manager.start(); await settle();
     manager.stop(); manager.start(); await settle();
-    expect(service.start).toHaveBeenCalledTimes(1);
+    expect(service.startCalls).toHaveBeenCalledTimes(1);
     service.respond('123456789012'); await settle();
-    expect(service.start).toHaveBeenCalledTimes(2);
+    expect(service.startCalls).toHaveBeenCalledTimes(2);
     expect(manager.getState()).toMatchObject({ status: 'loading', code: null });
     service.respond('999888777666');
     expect(manager.getState().code).toBe('999888777666');
@@ -115,9 +117,9 @@ describe('PairingManager', () => {
     ensureReceiver.mockRejectedValueOnce(new Error('sensitive initialization detail'));
     manager.start(); await settle();
     expect(manager.getState()).toMatchObject({ status: 'error', code: null });
-    expect(service.start).not.toHaveBeenCalled();
+    expect(service.startCalls).not.toHaveBeenCalled();
     manager.start(); await settle();
-    expect(service.start).toHaveBeenCalledTimes(1);
+    expect(service.startCalls).toHaveBeenCalledTimes(1);
   });
 
   it('rejects non-code service responses without exposing their contents', async () => {
@@ -137,14 +139,28 @@ describe('PairingManager', () => {
     expect(service.listenerCount('response')).toBe(0);
     expect(service.listenerCount('error')).toBe(0);
     manager.start();
-    expect(service.start).toHaveBeenCalledTimes(1);
+    expect(service.startCalls).toHaveBeenCalledTimes(1);
     expect(vi.getTimerCount()).toBe(0);
   });
 
   it('does not initialize a receiver for a request stopped before startup', async () => {
     manager.start(); manager.stop(); await settle();
     expect(ensureReceiver).not.toHaveBeenCalled();
-    expect(service.start).not.toHaveBeenCalled();
+    expect(service.startCalls).not.toHaveBeenCalled();
     expect(manager.getState().status).toBe('idle');
+  });
+
+  it('retains the receiver through pending work and the issued-code grace window', async () => {
+    expect(manager.canIdleReceiver()).toBe(true);
+    manager.start(); await settle();
+    expect(manager.canIdleReceiver()).toBe(false);
+    manager.stop();
+    expect(manager.canIdleReceiver()).toBe(false);
+    service.respond('123456789012'); await settle();
+    expect(manager.canIdleReceiver()).toBe(false);
+    await vi.advanceTimersByTimeAsync(329999);
+    expect(manager.canIdleReceiver()).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(manager.canIdleReceiver()).toBe(true);
   });
 });

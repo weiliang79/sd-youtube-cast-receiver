@@ -5,13 +5,13 @@ import os from 'node:os';
 import dgram from 'node:dgram';
 import { EventEmitter } from 'node:events';
 
-function setup() {
+function setup(canIdle?: () => boolean) {
   const addresses: string[] = [];
   const bindings: string[][] = [];
   const receiver = { start: vi.fn(async () => { bindings.push([...addresses]); }), stop: vi.fn(async () => {}) };
   const unavailable = vi.fn();
   const ready = vi.fn();
-  const lifecycle = new ReceiverLifecycle(receiver, addresses, unavailable, ready);
+  const lifecycle = new ReceiverLifecycle(receiver, addresses, unavailable, ready, canIdle);
   return { receiver, lifecycle, bindings, addresses, unavailable, ready };
 }
 
@@ -101,5 +101,43 @@ describe('ReceiverLifecycle', () => {
     await lifecycle.enableManual();
     expect(receiver.start).toHaveBeenCalledTimes(2);
     await lifecycle.close();
+  });
+
+  it('releases a manual-only receiver only when the current idle predicate permits it', async () => {
+    let phones = 1;
+    let playing = false;
+    const { lifecycle, receiver } = setup(() => phones === 0 && !playing);
+    await lifecycle.enableManual();
+    await lifecycle.releaseManualIfIdle();
+    expect(receiver.stop).not.toHaveBeenCalled();
+    phones = 0; playing = true;
+    await lifecycle.releaseManualIfIdle();
+    expect(receiver.stop).not.toHaveBeenCalled();
+    playing = false;
+    await lifecycle.releaseManualIfIdle();
+    expect(receiver.stop).toHaveBeenCalledOnce();
+    await lifecycle.releaseManualIfIdle();
+    expect(receiver.stop).toHaveBeenCalledOnce();
+    await lifecycle.enableManual();
+    expect(receiver.start).toHaveBeenCalledTimes(2);
+    await lifecycle.close();
+  });
+
+  it('keeps trusted discovery running and preserves a phone that connects before trust changes', async () => {
+    let idle = true;
+    const { lifecycle, receiver } = setup(() => idle);
+    await lifecycle.setNetwork('trusted');
+    await lifecycle.enableManual();
+    await lifecycle.releaseManualIfIdle();
+    expect(receiver.start).toHaveBeenCalledOnce();
+    expect(receiver.stop).not.toHaveBeenCalled();
+    expect(lifecycle.advertising).toBe(true);
+    idle = false; // A phone joins the still-running trusted receiver.
+    await lifecycle.setNetwork(null);
+    await lifecycle.releaseManualIfIdle();
+    expect(receiver.stop).not.toHaveBeenCalled();
+    idle = true;
+    await lifecycle.releaseManualIfIdle();
+    expect(receiver.stop).toHaveBeenCalledOnce();
   });
 });

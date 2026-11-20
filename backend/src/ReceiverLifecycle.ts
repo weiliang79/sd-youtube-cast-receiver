@@ -16,6 +16,7 @@ export class ReceiverLifecycle {
     private addresses: string[],
     private unavailable: () => void,
     private ready: () => void,
+    private canIdleManual: () => boolean = () => false,
   ) {}
 
   get advertising(): boolean { return this.mode !== null && this.mode !== 'manual'; }
@@ -37,6 +38,10 @@ export class ReceiverLifecycle {
     this.unavailable();
   }
 
+  releaseManualIfIdle(): Promise<void> {
+    return this.schedule(true);
+  }
+
   async close(): Promise<void> {
     this.closed = true;
     this.unavailable();
@@ -45,9 +50,12 @@ export class ReceiverLifecycle {
     this.mode = null;
   }
 
-  private schedule(): Promise<void> {
+  private schedule(releaseIfIdle = false): Promise<void> {
     const operation = this.pending.catch(() => {}).then(async () => {
       if (this.closed) return;
+      // A trusted receiver must run anyway. Keep its prior manual intent so a
+      // phone connecting there is not disconnected by a later trust change.
+      if (releaseIfIdle && this.manual && !this.network && this.canIdleManual()) this.manual = false;
       const desired = this.network ?? (this.manual ? 'manual' : null);
       if (desired === this.mode) return;
       if (this.mode && this.manual) {
